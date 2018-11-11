@@ -17,6 +17,10 @@ import threading
 import serial
 from serial.tools.list_ports import comports
 from serial.tools import hexlify_codec
+from time import sleep
+import time
+
+# pylint: disable=wrong-import-order,wrong-import-position
 
 # pylint: disable=wrong-import-order,wrong-import-position
 
@@ -29,6 +33,7 @@ except NameError:
     raw_input = input   # in python3 it's "raw"
     unichr = chr
 
+cmd = None
 
 def key_description(character):
     """generate a readable description for a key"""
@@ -356,6 +361,7 @@ class Miniterm(object):
         self.receiver_thread = None
         self.rx_decoder = None
         self.tx_decoder = None
+        self.lastread = None
 
     def _start_reader(self):
         """Start reader thread"""
@@ -448,15 +454,45 @@ class Miniterm(object):
                 if data:
                     if self.raw:
                         self.console.write_bytes(data)
+                        self.lastread += data
                     else:
                         text = self.rx_decoder.decode(data)
                         for transformation in self.rx_transformations:
                             text = transformation.rx(text)
                         self.console.write(text)
+                        self.lastread += text
+                    if len(self.lastread) > 200000:
+                        self.lastread = ""
         except serial.SerialException:
             self.alive = False
             self.console.cancel()
             raise       # XXX handle instead of re-raise?
+    def sendcmd(self,cmdSend="\n", strEpt=">", timeout=120):
+        global cmd
+        cmd = cmdSend
+        self.lastread = ""
+        #bgnTime = time
+        t_bgn = time.time()
+        while True:
+            time.sleep(0.1)
+            t_now = time.time()
+            if t_now-t_bgn>timeout:
+                self.logger.info("Time out at cmd:" + cmdSend)
+                print("Time out at cmd:" + cmdSend)
+                break
+            if self.lastread.find(strEpt) is not -1:
+                break
+        
+    def getcmd(self):
+        global cmd
+        sleep(0.1)
+        charSend = None
+        if cmd is not None:
+            n = len(cmd)
+            if n >0:
+                charSend = cmd[0]
+                cmd = cmd[1:]
+        return charSend
 
     def writer(self):
         """\
@@ -468,7 +504,11 @@ class Miniterm(object):
         try:
             while self.alive:
                 try:
-                    c = self.console.getkey()
+                    c = self.getcmd()
+                    if c is None:
+                        c = self.console.getkey()
+                        if c is None:
+                            continue
                 except KeyboardInterrupt:
                     c = '\x03'
                 if not self.alive:
